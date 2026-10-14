@@ -228,22 +228,28 @@ function geminiKey_() {
 function gemini_(body) {
   const model = (PropertiesService.getScriptProperties().getProperty('GEMINI_MODEL') || 'gemini-2.5-flash').trim();
   const key = geminiKey_();
-  // Khoá Google AI Studio bắt đầu bằng "AIza"; khoá Vertex AI (tạo trong Google Cloud) bắt đầu bằng "AQ."
-  const url = key.startsWith('AQ.')
-    ? 'https://aiplatform.googleapis.com/v1/publishers/google/models/' + encodeURIComponent(model) + ':generateContent'
-    : 'https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model) + ':generateContent';
-  const res = UrlFetchApp.fetch(url, {
-    method: 'post',
-    contentType: 'application/json',
-    headers: { 'x-goog-api-key': key },
-    payload: JSON.stringify(body),
-    muteHttpExceptions: true,
-  });
-  const code = res.getResponseCode();
-  let json = {};
-  try { json = JSON.parse(res.getContentText()); } catch (_) {}
-  if (code !== 200) console.error('Gemini ' + code + ' (' + model + '): ' + res.getContentText()); // xem trong Nhật ký thực thi
-  return { code, json, err: json.error || {}, model };
+  const m = encodeURIComponent(model);
+  // Khoá AI Studio ("AIza…" hoặc dạng mới "AQ.…") gọi máy chủ Gemini.
+  // Khoá "AQ." cũng có thể là khoá Vertex AI tạo trong Google Cloud: bị từ chối thì thử máy chủ Vertex.
+  const urls = ['https://generativelanguage.googleapis.com/v1beta/models/' + m + ':generateContent'];
+  if (key.startsWith('AQ.')) urls.push('https://aiplatform.googleapis.com/v1/publishers/google/models/' + m + ':generateContent');
+  let out;
+  for (const url of urls) {
+    const res = UrlFetchApp.fetch(url, {
+      method: 'post',
+      contentType: 'application/json',
+      headers: { 'x-goog-api-key': key },
+      payload: JSON.stringify(body),
+      muteHttpExceptions: true,
+    });
+    const code = res.getResponseCode();
+    let json = {};
+    try { json = JSON.parse(res.getContentText()); } catch (_) {}
+    if (code !== 200) console.error('Gemini ' + code + ' (' + model + ', ' + url.split('/')[2] + '): ' + res.getContentText()); // xem trong Nhật ký thực thi
+    out = { code, json, err: json.error || {}, model };
+    if (code !== 401 && code !== 403) break;
+  }
+  return out;
 }
 
 function isKeyError_(err) {
@@ -256,7 +262,7 @@ function geminiErrorText_(r) {
   if (isKeyError_(r.err)) return 'Khoá Gemini không đúng. Tạo khoá mới ở aistudio.google.com/apikey rồi dán lại vào GEMINI_API_KEY';
   if (/SERVICE_DISABLED|has not been used|is disabled/i.test(raw)) return 'Dự án của khoá chưa bật Gemini API. Tạo khoá ở aistudio.google.com/apikey sẽ tự bật';
   if (/location is not supported|User location/i.test(raw)) return 'Gemini chưa hỗ trợ khu vực của máy chủ, thử đổi GEMINI_MODEL';
-  if (r.code === 403) return 'Khoá Gemini không có quyền. Cách dễ nhất: tạo khoá ở aistudio.google.com/apikey (bắt đầu bằng AIza) rồi dán vào GEMINI_API_KEY';
+  if (r.code === 403) return 'Khoá Gemini chưa có quyền. Nếu vừa bật Gemini API thì chờ 5 phút rồi thử lại; vẫn lỗi thì tạo khoá mới ở aistudio.google.com/apikey';
   if (r.code === 404) return 'Không có mô hình "' + r.model + '". Sửa GEMINI_MODEL, ví dụ gemini-2.5-flash';
   if (r.code === 429) return 'Trợ lý đang quá tải hoặc hết lượt miễn phí, thử lại sau ít phút';
   return 'Gemini báo lỗi (mã ' + r.code + '). Mở Apps Script, chạy hàm testGemini để xem chi tiết';
@@ -266,7 +272,7 @@ function geminiErrorText_(r) {
 function testGemini() {
   const key = geminiKey_();
   Logger.log('Khoá dài ' + key.length + ' ký tự, bắt đầu bằng "' + key.slice(0, 4) + '" → '
-    + (key.startsWith('AQ.') ? 'khoá Vertex AI (Google Cloud)' : key.startsWith('AIza') ? 'khoá Google AI Studio' : 'không rõ loại khoá'));
+    + (key.startsWith('AQ.') || key.startsWith('AIza') ? 'đúng dạng khoá Google' : 'không giống khoá Google, kiểm tra lại'));
   const r = gemini_({ contents: [{ role: 'user', parts: [{ text: 'Trả lời đúng một chữ: OK' }] }] });
   if (r.code === 200) Logger.log('✅ Gemini chạy tốt với mô hình ' + r.model);
   else Logger.log('❌ ' + geminiErrorText_(r) + '\nChi tiết: ' + JSON.stringify(r.err));
