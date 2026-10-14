@@ -250,6 +250,11 @@ function pickNewModel_(err) {
 
 function gemini_(body) {
   let r = geminiOnce_(body, currentModel_());
+  // Quá tải tạm thời (503/500): chờ chút rồi thử lại tối đa 2 lần
+  for (let i = 1; i <= 2 && (r.code === 503 || r.code === 500); i++) {
+    Utilities.sleep(2000 * i);
+    r = geminiOnce_(body, r.model);
+  }
   if (r.code === 404) {
     const next = pickNewModel_(r.err);
     if (next && next !== r.model) {
@@ -302,6 +307,7 @@ function geminiErrorText_(r) {
   if (r.code === 403) return 'Khoá Gemini chưa có quyền. Nếu vừa bật Gemini API thì chờ 5 phút rồi thử lại; vẫn lỗi thì tạo khoá mới ở aistudio.google.com/apikey';
   if (r.code === 404) return 'Không tìm được mô hình Gemini dùng được (đang thử "' + r.model + '"). Đặt GEMINI_MODEL theo tên Google gợi ý trong Nhật ký thực thi';
   if (r.code === 429) return 'Trợ lý đang quá tải hoặc hết lượt miễn phí, thử lại sau ít phút';
+  if (r.code === 503 || r.code === 500) return 'Trợ lý Gemini đang quá tải, thử lại sau ít phút. Câu ghi sổ đơn giản (vd: cô Ba lấy 50 trả 30) vẫn ghi được bình thường';
   return 'Gemini báo lỗi (mã ' + r.code + '). Mở Apps Script, chạy hàm testGemini để xem chi tiết';
 }
 
