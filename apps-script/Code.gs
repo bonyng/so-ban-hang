@@ -26,15 +26,29 @@ const ACTIONS = {
   chat: p => chat(p),
 };
 
+const APP_URL = 'https://bonyng.github.io/so-ban-hang/';
+
 // Chạy một lần sau khi dán code: tạo sheet và mã truy cập (xem trong Nhật ký thực thi).
+// Muốn đổi mã (vd lỡ lộ): xoá APP_TOKEN trong Thuộc tính tập lệnh rồi chạy lại.
 function setup() {
   Object.keys(HEADERS).forEach(getSheet_);
   const props = PropertiesService.getScriptProperties();
-  if (!props.getProperty('APP_TOKEN')) {
-    props.setProperty('APP_TOKEN', (Utilities.getUuid() + Utilities.getUuid()).replace(/-/g, ''));
-  }
-  Logger.log('APP_TOKEN = ' + props.getProperty('APP_TOKEN'));
+  const old = props.getProperty('APP_TOKEN');
+  if (!old || old.length > 20) props.setProperty('APP_TOKEN', newCode_()); // thay mã dài kiểu cũ bằng mã ngắn
+  const code = props.getProperty('APP_TOKEN');
+  Logger.log('MÃ TRUY CẬP: ' + code.match(/.{4}/g).join('-'));
+  Logger.log('Hoặc mở link này trên điện thoại (tự điền mã): ' + APP_URL + '#ma=' + code);
 }
+
+// 12 ký tự dễ đọc, bỏ các ký tự dễ nhầm 0/O, 1/I/L
+function newCode_() {
+  const abc = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+  const bytes = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, Utilities.getUuid() + Utilities.getUuid() + Date.now());
+  return bytes.slice(0, 12).map(b => abc[(b + 256) % abc.length]).join('');
+}
+
+// Gõ hoa/thường, có gạch hay dấu cách đều được
+const normCode_ = s => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 
 function doGet() {
   return json_({ ok: true, data: 'Sổ bán vé số API' });
@@ -44,7 +58,7 @@ function doPost(e) {
   try {
     const req = JSON.parse(e.postData.contents);
     const token = PropertiesService.getScriptProperties().getProperty('APP_TOKEN');
-    if (!token || req.token !== token) throw new Error('Sai mã truy cập');
+    if (!token || normCode_(req.token) !== normCode_(token)) throw new Error('Sai mã truy cập');
     const fn = ACTIONS[req.action];
     if (!fn) throw new Error('Hành động không hợp lệ');
     return json_({ ok: true, data: fn(req.payload || {}) });

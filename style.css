@@ -83,6 +83,7 @@ nav span { display: block; font-size: 1.5rem; line-height: 1.2; }
 .cm-edit label { margin: 0; }
 .cm-edit input { padding: 8px 10px; min-width: 0; }
 .banner.queue { background: #e8f0fb; color: #1f3d66; }
+.code-input { font-size: 1.4rem; letter-spacing: 2px; text-align: center; font-variant-numeric: tabular-nums; font-weight: 700; }
 .msg .wait { color: #b26a00; font-weight: 700; }
 .cm-manual label { margin: 0 0 4px; }
 .cm-manual input { padding: 8px 10px; }

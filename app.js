@@ -38,7 +38,10 @@ function store(key, val) {
     localStorage.setItem(key, JSON.stringify(val));
   } catch (_) { return null; }
 }
-const getCfg = () => store('svs_cfg') || {};
+// Đường dẫn máy chủ Apps Script cài sẵn; người dùng chỉ cần nhập mã truy cập
+const DEFAULT_API = 'https://script.google.com/macros/s/AKfycbytaEQIspMib5fDxRfIZSEDHWaYFiYD-tShYrXz2-KdHP5_dQlibHZyAaCL9EIK0w1b/exec';
+const getCfg = () => { const c = store('svs_cfg') || {}; return { url: c.url || DEFAULT_API, token: c.token || '' }; };
+const fmtCode = s => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '').replace(/(.{4})(?=.)/g, '$1-');
 
 // ---------- Gọi API ----------
 // Không đặt header để fetch là "simple request", tránh preflight CORS với Apps Script.
@@ -134,7 +137,7 @@ function removeQueued(qid) {
 
 let NET_DOWN = false; // lần gửi gần nhất bị mất mạng
 async function flushQueue() {
-  if (!QUEUE.length || flushQueue.busy || !getCfg().url) return;
+  if (!QUEUE.length || flushQueue.busy || !getCfg().token) return;
   flushQueue.busy = true;
   const wasDown = NET_DOWN || OFFLINE;
   let sent = 0;
@@ -885,35 +888,48 @@ async function viewResults(r) {
 function viewSettings() {
   setHeader('Cài đặt', { back: () => go('chat') });
   const cfg = getCfg();
+  const custom = cfg.url !== DEFAULT_API;
   $('#view').innerHTML = `
     <div class="card">
-      <label for="sUrl">Đường dẫn kết nối</label>
-      <input id="sUrl" placeholder="https://script.google.com/macros/s/…/exec" value="${esc(cfg.url)}">
-      <label for="sTok">Mã truy cập</label>
-      <input id="sTok" type="password" value="${esc(cfg.token)}">
-      <button class="btn" id="sSave">Lưu và kiểm tra</button>
+      <label for="sTok">Nhập mã truy cập</label>
+      <input id="sTok" class="code-input" value="${esc(fmtCode(cfg.token))}" placeholder="XXXX-XXXX-XXXX"
+        autocapitalize="characters" autocomplete="off" autocorrect="off" spellcheck="false">
+      <button class="btn" id="sSave">Vào sổ</button>
+      <details style="margin-top:12px" ${custom ? 'open' : ''}><summary class="muted">Đổi máy chủ (ít khi cần)</summary>
+        <input id="sUrl" style="margin-top:8px" placeholder="https://script.google.com/macros/s/…/exec" value="${custom ? esc(cfg.url) : ''}">
+      </details>
     </div>
-    <div class="card"><button class="btn line" style="margin:0" id="sClear">Xoá tin nhắn trong khung Ghi sổ</button>
-      <div class="hint">Chỉ xoá tin nhắn trên máy này, sổ không bị ảnh hưởng.</div></div>
-    <div class="muted">Mã truy cập chỉ lưu trên máy này. Nếu lỡ lộ mã, hãy đổi mã mới trong Google Apps Script rồi nhập lại ở đây.</div>`;
-  $('#sClear').onclick = () => { CHAT = []; saveChat(); toast('Đã xoá tin nhắn'); };
-  $('#sSave').onclick = async e => {
-    const url = $('#sUrl').value.trim(), token = $('#sTok').value.trim();
-    if (!/^https:\/\/script\.google\.com\/.+\/exec$/.test(url)) return toast('Đường dẫn phải có dạng https://script.google.com/…/exec');
-    e.target.disabled = true;
-    store('svs_cfg', { url, token });
-    try {
-      DATA = await api('getData');
-      OFFLINE = false;
-      store('svs_data', { data: DATA, at: new Date().toISOString() });
-      $('#offline').hidden = true;
-      toast('Kết nối thành công');
-      go('chat');
-    } catch (err) {
-      toast(errText(err, 'Không kết nối được, kiểm tra lại đường dẫn'));
-      e.target.disabled = false;
-    }
-  };
+    ${cfg.token ? `<div class="card"><button class="btn line" style="margin:0" id="sClear">Xoá tin nhắn trong khung Ghi sổ</button>
+      <div class="hint">Chỉ xoá trên máy này, sổ vẫn còn.</div></div>` : ''}`;
+  const clr = $('#sClear');
+  if (clr) clr.onclick = () => { CHAT = []; saveChat(); toast('Đã xoá tin nhắn'); };
+  const tok = $('#sTok');
+  tok.oninput = () => { const v = fmtCode(tok.value); if (v !== tok.value) tok.value = v; };
+  $('#sSave').onclick = e => connect($('#sTok').value, $('#sUrl').value.trim(), e.target);
+}
+
+// Lưu mã, thử lấy sổ; đúng thì vào khung Ghi sổ
+async function connect(code, url, btn) {
+  const token = code.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (!token) return toast('Nhập mã truy cập');
+  if (url && !/^https:\/\/script\.google\.com\/.+\/exec$/.test(url)) return toast('Đường dẫn máy chủ không đúng');
+  if (btn) btn.disabled = true;
+  const prev = store('svs_cfg');
+  store('svs_cfg', { url: url || '', token });
+  try {
+    DATA = await api('getData');
+    OFFLINE = false;
+    store('svs_data', { data: DATA, at: new Date().toISOString() });
+    $('#offline').hidden = true;
+    applyQueue();
+    toast('Đã vào sổ');
+    go('chat');
+  } catch (err) {
+    if (!(err instanceof TypeError)) store('svs_cfg', prev || {}); // sai mã thì không lưu
+    toast(errText(err, 'Không có mạng, thử lại'));
+    if (btn) btn.disabled = false;
+    else go('settings');
+  }
 }
 
 // ---------- Bàn phím mở/đóng ----------
@@ -947,8 +963,14 @@ if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catc
 (async () => {
   CHAT = store('svs_chat') || [];
   CHAT = CHAT.filter(m => m.kind !== 'thinking');
+  // Mở bằng link có sẵn mã (…#ma=XXXX): tự điền mã rồi xoá khỏi thanh địa chỉ
+  const fromLink = (location.hash.match(/ma=([A-Za-z0-9-]+)/) || [])[1];
+  if (fromLink) {
+    history.replaceState(null, '', location.pathname + location.search);
+    return connect(fromLink, '');
+  }
   const cfg = getCfg();
-  if (!cfg.url || !cfg.token) return go('settings');
+  if (!cfg.token) return go('settings');
   // Mở ngay bằng sổ đã lưu lần trước, rồi lấy bản mới từ Sheet ở phía sau
   const cached = store('svs_data');
   if (cached) {

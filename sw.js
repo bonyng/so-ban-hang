@@ -1,5 +1,5 @@
 // Lưu khung app trên máy để mở ngay và mở được khi mất mạng. Đổi VERSION mỗi lần sửa giao diện.
-const VERSION = 'svs-v5';
+const VERSION = 'svs-v6';
 const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'manifest.json', 'icons/icon-192.png', 'icons/icon-512.png'];
 
 self.addEventListener('install', e => {
