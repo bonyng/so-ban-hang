@@ -168,11 +168,13 @@ const AI_RULES = [
   '  "1tr" hoặc "1 triệu" = 1000000; "1tr2" = 1200000. Số có dấu chấm ngăn nghìn như "50.000" là số đồng đầy đủ = 50000.',
   '  "trả đủ" nghĩa là da_tra = tien_ve. "trả hết nợ" nghĩa là da_tra = số dư hiện tại của khách + tien_ve.',
   '- loai = "cau_hoi" khi họ hỏi về khách hàng, công nợ, doanh thu. Ghi câu trả lời vào tra_loi,',
-  '  chỉ dựa trên DỮ LIỆU SỔ, tính cẩn thận, ngắn gọn, tiếng Việt dễ hiểu.',
+  '  chỉ dựa trên DỮ LIỆU SỔ, tính cẩn thận.',
+  '  Người đọc là người lớn tuổi: trả lời TỐI ĐA 3 DÒNG, câu thật ngắn, không giải thích dài, không chào hỏi.',
+  '  Danh sách thì mỗi dòng một người, dạng "• Tên: số tiền", tối đa 5 người.',
   '  Dùng từ của sổ cửa hàng: "bán" (tiền hàng khách lấy), "thu" (tiền khách đưa), "còn nợ", "doanh thu". Không dùng chữ "vé".',
   '  Ghi số tiền dạng gọn: 500k (500.000đ), 1tr5 (1.500.000đ), 1tr25 (1.250.000đ), 2tr (2.000.000đ).',
   '  Số dư dương là khách còn thiếu, âm là khách trả dư. Không có trong sổ thì nói không có, không bịa.',
-  '- loai = "khong_ro" cho mọi trường hợp khác, tra_loi nhắc cách nhắn, vd "cô Ba lấy 50 trả 30".',
+  '- loai = "khong_ro" cho mọi trường hợp khác, tra_loi chỉ một câu ngắn, vd "Nhắn kiểu: cô Ba lấy 50 trả 30".',
   'Từ chối mọi yêu cầu về lô đề, dự đoán, thống kê hay soi cầu số xổ số (loai = "khong_ro").',
 ].join('\n');
 
