@@ -180,7 +180,17 @@ async function flushQueue() {
   }
 }
 window.addEventListener('online', () => flushQueue());
-document.addEventListener('visibilitychange', () => { if (!document.hidden) flushQueue(); });
+// Nhiều máy dùng chung sổ: mở lại app hoặc mỗi phút lấy sổ mới để thấy máy kia vừa ghi.
+// Đang gõ thì bỏ qua để không làm mất chữ.
+async function syncNow() {
+  if (document.hidden || !getCfg().token) return;
+  await flushQueue();
+  if (document.body.classList.contains('typing') || flushQueue.busy) return;
+  await reload().catch(() => {});
+  refresh();
+}
+document.addEventListener('visibilitychange', syncNow);
+setInterval(syncNow, 60000);
 setInterval(() => { if (QUEUE.length) flushQueue(); }, 30000);
 function needOnline() {
   if (OFFLINE) { toast('Đang mất mạng, chưa ghi được'); return false; }
@@ -707,9 +717,11 @@ function viewCustomer(id) {
 }
 
 // Sửa số nợ: không sửa các lần ghi cũ, mà ghi thêm 1 dòng chênh lệch để số nợ khớp số mới
-function adjustDebt(c, input) {
+async function adjustDebt(c, input) {
   const want = parseMoney(String(input || '0').trim() || '0');
   if (want == null) return toast('Số tiền chưa đúng, gõ ví dụ 50 hoặc 1tr2');
+  // Lấy sổ mới nhất trước, phòng máy khác vừa ghi cho khách này
+  if (!OFFLINE) await reload().catch(() => {});
   const now = balances()[c.ID] || 0;
   const diff = want - now;
   if (!diff) return viewCustomer(c.ID);
