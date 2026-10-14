@@ -225,8 +225,45 @@ function geminiKey_() {
   return key;
 }
 
+// Mô hình: GEMINI_MODEL nếu bạn tự đặt, không thì mô hình app tự chọn lần trước
+function currentModel_() {
+  const props = PropertiesService.getScriptProperties();
+  return (props.getProperty('GEMINI_MODEL') || props.getProperty('GEMINI_MODEL_AUTO') || 'gemini-2.5-flash').trim();
+}
+
+// Google ngừng mô hình cũ: lấy tên Google gợi ý trong lỗi, hoặc bản Flash mới nhất trong danh sách
+function pickNewModel_(err) {
+  const hint = String((err && err.message) || '').match(/use models\/([\w.-]+)/i);
+  if (hint) return hint[1];
+  const res = UrlFetchApp.fetch('https://generativelanguage.googleapis.com/v1beta/models?pageSize=200', {
+    headers: { 'x-goog-api-key': geminiKey_() }, muteHttpExceptions: true,
+  });
+  if (res.getResponseCode() !== 200) return null;
+  const ver = n => (n.match(/gemini-(\d+(?:\.\d+)?)/) || [0, 0])[1] * 1;
+  const names = (JSON.parse(res.getContentText()).models || [])
+    .filter(x => (x.supportedGenerationMethods || []).includes('generateContent'))
+    .map(x => x.name.replace(/^models\//, ''))
+    .filter(n => /^gemini-[\d.]+-flash$/.test(n))
+    .sort((a, b) => ver(b) - ver(a));
+  return names[0] || null;
+}
+
 function gemini_(body) {
-  const model = (PropertiesService.getScriptProperties().getProperty('GEMINI_MODEL') || 'gemini-2.5-flash').trim();
+  let r = geminiOnce_(body, currentModel_());
+  if (r.code === 404) {
+    const next = pickNewModel_(r.err);
+    if (next && next !== r.model) {
+      const props = PropertiesService.getScriptProperties();
+      props.setProperty('GEMINI_MODEL_AUTO', next);
+      if (props.getProperty('GEMINI_MODEL')) props.deleteProperty('GEMINI_MODEL'); // tên đặt tay đã hỏng
+      console.log('Chuyển sang mô hình ' + next);
+      r = geminiOnce_(body, next);
+    }
+  }
+  return r;
+}
+
+function geminiOnce_(body, model) {
   const key = geminiKey_();
   const m = encodeURIComponent(model);
   // Khoá AI Studio ("AIza…" hoặc dạng mới "AQ.…") gọi máy chủ Gemini.
@@ -263,7 +300,7 @@ function geminiErrorText_(r) {
   if (/SERVICE_DISABLED|has not been used|is disabled/i.test(raw)) return 'Dự án của khoá chưa bật Gemini API. Tạo khoá ở aistudio.google.com/apikey sẽ tự bật';
   if (/location is not supported|User location/i.test(raw)) return 'Gemini chưa hỗ trợ khu vực của máy chủ, thử đổi GEMINI_MODEL';
   if (r.code === 403) return 'Khoá Gemini chưa có quyền. Nếu vừa bật Gemini API thì chờ 5 phút rồi thử lại; vẫn lỗi thì tạo khoá mới ở aistudio.google.com/apikey';
-  if (r.code === 404) return 'Không có mô hình "' + r.model + '". Sửa GEMINI_MODEL, ví dụ gemini-2.5-flash';
+  if (r.code === 404) return 'Không tìm được mô hình Gemini dùng được (đang thử "' + r.model + '"). Đặt GEMINI_MODEL theo tên Google gợi ý trong Nhật ký thực thi';
   if (r.code === 429) return 'Trợ lý đang quá tải hoặc hết lượt miễn phí, thử lại sau ít phút';
   return 'Gemini báo lỗi (mã ' + r.code + '). Mở Apps Script, chạy hàm testGemini để xem chi tiết';
 }
