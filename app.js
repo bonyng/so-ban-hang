@@ -47,10 +47,10 @@ const fmtCode = s => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '').rep
 // Không đặt header để fetch là "simple request", tránh preflight CORS với Apps Script.
 async function api(action, payload) {
   const cfg = getCfg();
-  if (!cfg.url || !cfg.token) throw new Error('Chưa cài đặt kết nối');
+  if (!cfg.url || !cfg.token) throw new Error('Chưa nhập mã truy cập');
   const res = await fetch(cfg.url, { method: 'POST', body: JSON.stringify({ token: cfg.token, action, payload }) });
   let j;
-  try { j = await res.json(); } catch (_) { throw new Error('Phản hồi không hợp lệ, kiểm tra lại đường dẫn kết nối'); }
+  try { j = await res.json(); } catch (_) { throw new Error('Máy chủ đang lỗi, thử lại sau'); }
   if (!j.ok) throw new Error(j.error || 'Có lỗi xảy ra');
   return j.data;
 }
@@ -79,7 +79,7 @@ async function reload() {
     DATA.today = localToday();
     OFFLINE = true;
     const b = $('#offline');
-    b.textContent = 'Mất kết nối, đang xem sổ lưu lúc ' + new Date(cached.at).toLocaleString('vi-VN');
+    b.textContent = '📵 Mất mạng. Vẫn ghi sổ được, có mạng app tự gửi.';
     b.hidden = false;
   }
   applyQueue();
@@ -104,7 +104,7 @@ function applyQueue() {
   // Chỉ nhắc khi thật sự đang mất mạng; lúc bình thường lần ghi gửi xong trong vài giây
   const b = $('#queue');
   b.hidden = !QUEUE.length || !(OFFLINE || NET_DOWN);
-  b.textContent = `🕓 ${QUEUE.length} lần ghi đang lưu trên máy, sẽ tự gửi khi có mạng`;
+  b.textContent = `🕓 ${QUEUE.length} lần ghi chờ gửi, có mạng sẽ tự gửi`;
 }
 
 function enqueue(d) {
@@ -196,14 +196,16 @@ function balances() {
 }
 function balText(v) {
   if (v > 0) return `<span class="debt">Còn nợ ${money(v)}</span>`;
-  if (v < 0) return `<span class="credit">Dư ${money(-v)}</span>`;
+  if (v < 0) return `<span class="credit">Trả dư ${money(-v)}</span>`;
   return '<span class="muted">Hết nợ</span>';
 }
 const debtors = () => { const b = balances(); return DATA.customers.filter(c => b[c.ID] > 0).map(c => [c, b[c.ID]]).sort((a, z) => z[1] - a[1]); };
 const totalDebt = () => debtors().reduce((a, [, v]) => a + v, 0);
 const custById = id => DATA.customers.find(c => c.ID === id);
+// Dòng sửa số nợ chỉ đổi công nợ, không tính là bán hay thu
+const isAdj = t => String(t.GhiChu || '').startsWith('Điều chỉnh nợ');
 function sumRange(from, to) {
-  const txs = DATA.txs.filter(t => t.Ngay >= from && t.Ngay <= to);
+  const txs = DATA.txs.filter(t => t.Ngay >= from && t.Ngay <= to && !isAdj(t));
   return {
     txs,
     hang: txs.reduce((a, t) => a + (Number(t.TienHang) || 0), 0),
@@ -403,8 +405,8 @@ function draftHTML(m) {
   if (m.status === 'saved') {
     const now = balances()[d.khachId] || 0;
     return `<div class="msg bot cm">${head(flowText(d.tienHang, d.daTra))}
-      <div class="cm-foot">${m.undone ? '<span class="muted">↩️ Đã hoàn tác</span>'
-        : `<span>${m.queued && (OFFLINE || NET_DOWN) ? '<span class="wait">🕓 Lưu trên máy</span>' : '<span class="done">✓ Đã ghi</span>'} · ${balText(now)}</span><button class="undo" data-act="undo" data-id="${m.id}">Hoàn tác</button>`}</div></div>`;
+      <div class="cm-foot">${m.undone ? '<span class="muted">↩️ Đã bỏ, không ghi</span>'
+        : `<span>${m.queued && (OFFLINE || NET_DOWN) ? '<span class="wait">🕓 Chờ gửi</span>' : '<span class="done">✓ Đã ghi</span>'} · ${balText(now)}</span><button class="undo" data-act="undo" data-id="${m.id}">Ghi nhầm</button>`}</div></div>`;
   }
   if (m.editing) {
     return `<div class="msg bot cm">${head('Sửa số tiền (nghìn đồng)')}
@@ -428,7 +430,7 @@ function msgHTML(m) {
   if (m.role === 'me') return `<div class="msg me">${esc(m.text)}</div>`;
   if (m.kind === 'draft') return draftHTML(m);
   if (m.kind === 'pick') {
-    if (m.status === 'done') return `<div class="msg bot muted">Đã chọn khách.</div>`;
+    if (m.status === 'done') return '';
     const b = balances();
     return `<div class="msg bot wide">Chưa thấy <b>${esc(m.draft.rawName)}</b> trong sổ.${m.cands.length ? ' Có phải là:' : ''}
       ${m.cands.map(id => { const c = custById(id); return c ? `<button class="opt" data-act="pick" data-id="${m.id}" data-arg="${id}">${esc(c.Ten)} <span class="muted">· ${b[id] > 0 ? 'nợ ' + money(b[id]) : 'hết nợ'}</span></button>` : ''; }).join('')}
@@ -457,14 +459,12 @@ function quickAnswer(t) {
   if (/huong dan|cach ghi|giup/.test(t)) return botSay(HELP), true;
   if (/\b(ai|khach nao)\b.*\b(no|thieu)\b|\bdang no\b/.test(t)) {
     const list = debtors();
-    botSay(list.length
-      ? `Có ${list.length} khách đang nợ, tổng **${money(totalDebt())}**:\n` + list.slice(0, 10).map(([c, v]) => `• ${c.Ten}: ${money(v)}`).join('\n')
-      : 'Hiện không có khách nào nợ 👍');
+    botSay(list.length ? debtList(list) : 'Không ai nợ 👍', list.length > 5 ? { go: 'customers', goLabel: '👥 Xem hết' } : {});
     return true;
   }
   if (/hom nay/.test(t) && /ban|thu|doanh/.test(t)) {
     const s = sumRange(DATA.today, DATA.today);
-    botSay(`Hôm nay (${fmtDate(DATA.today)}):\n• Doanh thu: **${money(s.hang)}**\n• Đã thu: **${money(s.tra)}**\n• Số khách: ${s.khach}`);
+    botSay(`Hôm nay: bán **${money(s.hang)}**, thu **${money(s.tra)}**`);
     return true;
   }
   return false;
@@ -580,11 +580,11 @@ async function onChatClick(ev) {
     return;
   }
   if (act === 'undo') {
-    if (m.queued) { removeQueued(m.txId); m.undone = true; toast('Đã hoàn tác'); return renderChat(); }
+    if (m.queued) { removeQueued(m.txId); m.undone = true; toast('Đã bỏ lần ghi'); return renderChat(); }
     if (!needOnline()) return;
     m.undone = true;
     deleteInBackground(m.txId, () => { m.undone = false; });
-    toast('Đã hoàn tác');
+    toast('Đã bỏ lần ghi');
     return renderChat();
   }
 }
@@ -593,10 +593,15 @@ function weekSummary() {
   const [from, to] = weekRange(DATA.today);
   const s = sumRange(from, to);
   const list = debtors();
-  return `📋 Tổng kết tuần ${shortDate(from)} – ${shortDate(to)}\n• Doanh thu: **${money(s.hang)}**\n• Đã thu: **${money(s.tra)}**\n• Số khách: ${s.khach}\n\n`
-    + (list.length
-      ? `Khách đang nợ (${list.length} người, tổng **${money(totalDebt())}**):\n` + list.slice(0, 15).map(([c, v]) => `• ${c.Ten}: ${money(v)}`).join('\n')
-      : 'Không có khách nào nợ 👍');
+  return `📋 Tuần này (${shortDate(from)}–${shortDate(to)})\nBán **${money(s.hang)}**, thu **${money(s.tra)}**\n\n`
+    + (list.length ? debtList(list) : 'Không ai nợ 👍');
+}
+// Tối đa 5 người nợ nhiều nhất, còn lại gộp 1 dòng cho dễ đọc
+function debtList(list) {
+  const more = list.length - 5;
+  return `Còn nợ: **${money(totalDebt())}** (${list.length} người)\n`
+    + list.slice(0, 5).map(([c, v]) => `• ${c.Ten}: ${money(v)}`).join('\n')
+    + (more > 0 ? `\n… và ${more} người nữa` : '');
 }
 // Chủ nhật mở app lần đầu trong ngày: tự gửi tổng kết tuần
 function autoWeekly() {
@@ -631,9 +636,9 @@ function viewCustomers(q = '') {
   $('#view').innerHTML = `
     <div class="stats">
       <div class="card"><div class="muted">Hôm nay bán</div><div class="big">${money(today.hang)}</div></div>
-      <div class="card"><div class="muted">Khách đang nợ</div><div class="big debt">${money(totalDebt())}</div></div>
+      <div class="card"><div class="muted">Khách còn nợ</div><div class="big debt">${money(totalDebt())}</div></div>
     </div>
-    <button class="btn soft" style="margin:0 0 12px" onclick="go('report')">📊 Báo cáo, biểu đồ, xuất Excel</button>
+    <button class="btn soft" style="margin:0 0 12px" onclick="go('report')">📊 Xem báo cáo</button>
     <input id="q" type="search" placeholder="🔍 Tìm khách…" value="${esc(q)}">
     <div style="height:12px"></div>
     ${list.length ? `<div class="list">${list.map(c => `
@@ -656,7 +661,7 @@ function viewCustomer(id) {
   // Số dư sau từng lần ghi, cộng dồn từ lần cũ nhất
   const after = {};
   txs.slice().reverse().reduce((run, t) => (after[t.ID] = run + (Number(t.TienHang) || 0) - (Number(t.DaTra) || 0)), 0);
-  const afterText = v => v > 0 ? 'còn nợ ' + money(v) : v < 0 ? 'dư ' + money(-v) : 'hết nợ';
+  const afterText = v => v > 0 ? 'còn nợ ' + money(v) : v < 0 ? 'trả dư ' + money(-v) : 'hết nợ';
   const phone = String(c.SDT || '').replace(/[^\d+]/g, '');
   $('#view').innerHTML = `
     <div class="card" style="text-align:center">
@@ -670,24 +675,50 @@ function viewCustomer(id) {
                   : phone ? `<a class="btn line" href="tel:${esc(phone)}">📞 Gọi</a>` : '<span></span>'}
       </div>
       ${bal > 0 && phone ? `<a class="btn line" href="tel:${esc(phone)}">📞 Gọi ${esc(c.SDT)}</a>` : ''}
+      <button class="btn line" id="adjBtn">✏️ Sửa số nợ</button>
+      <div id="adjBox" class="adj" hidden>
+        <label for="adjV">Khách còn nợ bao nhiêu? (nghìn đồng)</label>
+        <input id="adjV" inputmode="decimal" value="${bal > 0 ? bal / 1000 : 0}" autocomplete="off">
+        <div class="hint">Gõ 0 nếu khách đã hết nợ</div>
+        <div class="btns"><button class="btn" id="adjOk">Lưu</button><button class="btn line" id="adjNo">Huỷ</button></div>
+      </div>
     </div>
     <div class="card">
-      <strong>Lịch sử</strong>
+      <strong>Các lần ghi</strong>
       ${txs.map(t => {
         const net = (Number(t.TienHang) || 0) - (Number(t.DaTra) || 0);
         const netHTML = net > 0 ? `<span class="net debt">+${money(net)}<small>nợ thêm</small></span>`
-          : net < 0 ? `<span class="net credit">−${money(-net)}<small>trả bớt</small></span>`
+          : net < 0 ? `<span class="net credit">−${money(-net)}<small>bớt nợ</small></span>`
           : '<span class="net muted">Đủ</span>';
         return `
         <div class="tx" onclick="this.classList.toggle('open')">
           <div class="row"><b>${dayLabel(t.Ngay)}${t.Ngay.slice(0, 4) !== DATA.today.slice(0, 4) ? '/' + t.Ngay.slice(0, 4) : ''}</b>${netHTML}</div>
-          <div class="row"><span>${flowText(Number(t.TienHang), Number(t.DaTra))}</span><span class="muted">${afterText(after[t.ID])}</span></div>
-          ${t.GhiChu ? `<div class="muted">“${esc(t.GhiChu)}”</div>` : ''}
+          <div class="row"><span>${isAdj(t) ? '✏️ Sửa số nợ' : flowText(Number(t.TienHang), Number(t.DaTra))}</span><span class="muted">${afterText(after[t.ID])}</span></div>
+          ${t.GhiChu && !isAdj(t) ? `<div class="muted">“${esc(t.GhiChu)}”</div>` : ''}
           <button class="del" onclick="event.stopPropagation(); delTx('${t.ID}','${id}')">Xoá dòng này</button>
         </div>`;
-      }).join('') || '<div class="muted" style="margin-top:8px">Chưa có giao dịch.</div>'}
+      }).join('') || '<div class="muted" style="margin-top:8px">Chưa ghi lần nào.</div>'}
       ${txs.length ? '<div class="hint" style="text-align:center">Bấm vào một dòng để xoá nếu ghi nhầm</div>' : ''}
     </div>`;
+  const box = $('#adjBox');
+  $('#adjBtn').onclick = () => { box.hidden = false; $('#adjBtn').hidden = true; $('#adjV').select(); };
+  $('#adjNo').onclick = () => { box.hidden = true; $('#adjBtn').hidden = false; };
+  $('#adjOk').onclick = () => adjustDebt(c, $('#adjV').value);
+}
+
+// Sửa số nợ: không sửa các lần ghi cũ, mà ghi thêm 1 dòng chênh lệch để số nợ khớp số mới
+function adjustDebt(c, input) {
+  const want = parseMoney(String(input || '0').trim() || '0');
+  if (want == null) return toast('Số tiền chưa đúng, gõ ví dụ 50 hoặc 1tr2');
+  const now = balances()[c.ID] || 0;
+  const diff = want - now;
+  if (!diff) return viewCustomer(c.ID);
+  const note = `Điều chỉnh nợ: ${money(Math.max(now, 0))} → ${money(want)}`;
+  if (!confirm(`Sửa số nợ của ${c.Ten} thành ${moneyFull(want)}?`)) return;
+  enqueue({ khachId: c.ID, tienHang: diff > 0 ? diff : 0, daTra: diff < 0 ? -diff : 0, ngay: DATA.today, ghiChu: note });
+  flushQueue();
+  toast('Đã sửa số nợ');
+  viewCustomer(c.ID);
 }
 
 async function delTx(txId, custId) {
@@ -730,7 +761,7 @@ function viewCustomerForm(c = {}) {
   setHeader(c.ID ? 'Sửa khách' : 'Thêm khách', { back: () => c.ID ? go('customer', c.ID) : go('customers') });
   $('#view').innerHTML = `
     <div class="card">
-      <label for="cTen">Tên *</label><input id="cTen" value="${esc(c.Ten)}" placeholder="VD: Cô Ba tạp hoá">
+      <label for="cTen">Tên khách</label><input id="cTen" value="${esc(c.Ten)}" placeholder="VD: Cô Ba tạp hoá">
       <label for="cSDT">Số điện thoại (để nhắc nợ qua Zalo)</label><input id="cSDT" type="tel" value="${esc(c.SDT)}">
       <label for="cDC">Địa chỉ</label><input id="cDC" value="${esc(c.DiaChi)}">
       <label for="cGC">Ghi chú</label><input id="cGC" value="${esc(c.GhiChu)}">
@@ -775,13 +806,13 @@ function chartSVG(from, to) {
   const label = k => monthly ? 'T' + Number(k.slice(5, 7)) + (from.slice(0, 4) !== to.slice(0, 4) ? '/' + k.slice(2, 4) : '') : shortDate(k);
   const current = keyOf(DATA.today);
   const val = {};
-  DATA.txs.forEach(t => { if (t.Ngay >= from && t.Ngay <= to) val[keyOf(t.Ngay)] = (val[keyOf(t.Ngay)] || 0) + (Number(t.TienHang) || 0); });
+  DATA.txs.forEach(t => { if (t.Ngay >= from && t.Ngay <= to && !isAdj(t)) val[keyOf(t.Ngay)] = (val[keyOf(t.Ngay)] || 0) + (Number(t.TienHang) || 0); });
   const max = Math.max(...days.map(d => val[d] || 0), 1);
   const W = 600, H = 200, top = 22, bottom = 24, left = 4;
   const bw = (W - left) / days.length;
   const y = v => top + (H - top - bottom) * (1 - v / max);
   const step = Math.ceil(days.length / 7);
-  return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Biểu đồ doanh thu theo ngày">
+  return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Biểu đồ tiền bán">
     <line x1="0" x2="${W}" y1="${top}" y2="${top}" stroke="#e4e6eb" stroke-dasharray="4 4"/>
     <text x="${W - 2}" y="${top - 6}" text-anchor="end">${money(max)}</text>
     <line x1="0" x2="${W}" y1="${H - bottom}" y2="${H - bottom}" stroke="#e4e6eb"/>
@@ -803,12 +834,12 @@ function viewReport(key) {
     <div class="seg">${tabs.map(([k, l]) => `<button class="${k === reportRange ? 'on' : ''}" onclick="viewReport('${k}')">${l}</button>`).join('')}</div>
     <div class="muted" style="margin-bottom:8px">Từ ${fmtDate(from)} đến ${fmtDate(to)}</div>
     <div class="stats">
-      <div class="card"><div class="muted">Doanh thu</div><div class="big">${money(s.hang)}</div></div>
-      <div class="card"><div class="muted">Đã thu</div><div class="big">${money(s.tra)}</div></div>
+      <div class="card"><div class="muted">Bán</div><div class="big">${money(s.hang)}</div></div>
+      <div class="card"><div class="muted">Thu</div><div class="big">${money(s.tra)}</div></div>
     </div>
-    <div class="card"><div class="row"><strong>Doanh thu theo ${byMonth(from, to) ? 'tháng' : 'ngày'}</strong><span class="muted">${s.khach} khách</span></div>${chartSVG(from, to)}</div>
-    <div class="card"><div class="muted">Khách đang nợ (tất cả)</div><div class="big debt">${money(totalDebt())}</div>
-      ${debtors().slice(0, 10).map(([c, v]) => `<div class="row tx"><span>${esc(c.Ten)}</span><b>${money(v)}</b></div>`).join('')}</div>
+    <div class="card"><div class="row"><strong>Bán theo ${byMonth(from, to) ? 'tháng' : 'ngày'}</strong><span class="muted">${s.khach} khách</span></div>${chartSVG(from, to)}</div>
+    <div class="card"><div class="muted">Khách còn nợ (đến hôm nay)</div><div class="big debt">${money(totalDebt())}</div>
+      ${debtors().slice(0, 5).map(([c, v]) => `<div class="row tx"><span>${esc(c.Ten)}</span><b>${money(v)}</b></div>`).join('')}</div>
     <button class="btn" id="xls">📥 Tải sổ về máy (file Excel)</button>
     <div class="hint" style="text-align:center">Gồm danh sách khách và toàn bộ giao dịch</div>`;
   $('#xls').onclick = exportExcel;
