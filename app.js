@@ -79,7 +79,93 @@ async function reload() {
     b.textContent = 'Mất kết nối, đang xem sổ lưu lúc ' + new Date(cached.at).toLocaleString('vi-VN');
     b.hidden = false;
   }
+  applyQueue();
 }
+
+// ---------- Lưu tạm trên máy khi mất mạng, tự gửi khi có mạng ----------
+// Mỗi phần tử: { qid, KhachID, newName, tmpCust, Ngay, TienHang, DaTra, GhiChu }.
+// Khách mới tạo lúc mất mạng có mã tạm "TMP…", được đổi sang mã thật khi gửi.
+let QUEUE = store('svs_queue') || [];
+const saveQueue = () => store('svs_queue', QUEUE);
+
+// Thêm các lần ghi đang chờ vào sổ đang xem để số nợ cập nhật ngay
+function applyQueue() {
+  QUEUE.forEach(q => {
+    if (q.newName && !DATA.customers.some(c => c.ID === q.tmpCust)) {
+      DATA.customers.push({ ID: q.tmpCust, Ten: q.newName, SDT: '', DiaChi: '', GhiChu: '', pending: true });
+    }
+    if (!DATA.txs.some(t => t.ID === q.qid)) {
+      DATA.txs.push({ ID: q.qid, Ngay: q.Ngay, KhachID: q.KhachID || q.tmpCust, TienHang: q.TienHang, DaTra: q.DaTra, GhiChu: q.GhiChu, pending: true });
+    }
+  });
+  const b = $('#queue');
+  b.hidden = !QUEUE.length;
+  b.textContent = `🕓 ${QUEUE.length} lần ghi đang lưu trên máy, sẽ tự gửi khi có mạng`;
+}
+
+function enqueue(d) {
+  const qid = 'Q' + uid();
+  const isNew = !d.khachId;
+  QUEUE.push({
+    qid, KhachID: isNew ? null : d.khachId, newName: isNew ? d.newName : null, tmpCust: isNew ? 'TMP' + qid : null,
+    Ngay: d.ngay, TienHang: d.tienHang, DaTra: d.daTra, GhiChu: d.ghiChu,
+  });
+  if (isNew) d.khachId = 'TMP' + qid;
+  saveQueue();
+  applyQueue();
+  return qid;
+}
+
+function removeQueued(qid) {
+  const i = QUEUE.findIndex(q => q.qid === qid);
+  if (i < 0) return;
+  const [q] = QUEUE.splice(i, 1);
+  if (q.newName) {
+    // Lần ghi khác của cùng khách mới sẽ đảm nhận việc tạo khách
+    const next = QUEUE.find(x => x.KhachID === q.tmpCust);
+    if (next) { next.newName = q.newName; next.tmpCust = q.tmpCust; }
+    else DATA.customers = DATA.customers.filter(c => c.ID !== q.tmpCust);
+  }
+  DATA.txs = DATA.txs.filter(t => t.ID !== qid);
+  saveQueue();
+  applyQueue();
+}
+
+async function flushQueue() {
+  if (!QUEUE.length || flushQueue.busy || !getCfg().url) return;
+  flushQueue.busy = true;
+  let sent = 0;
+  try {
+    while (QUEUE.length) {
+      const q = QUEUE[0];
+      if (q.newName) {
+        const real = await api('saveCustomer', { Ten: q.newName });
+        QUEUE.forEach(x => { if (x.KhachID === q.tmpCust) x.KhachID = real; });
+        CHAT.forEach(m => { if (m.draft && m.draft.khachId === q.tmpCust) m.draft.khachId = real; });
+        q.KhachID = real; q.newName = null;
+        saveQueue();
+      }
+      const txId = await api('addTransaction', { KhachID: q.KhachID, Ngay: q.Ngay, TienHang: q.TienHang, DaTra: q.DaTra, GhiChu: q.GhiChu });
+      CHAT.forEach(m => { if (m.txId === q.qid) { m.txId = txId; m.queued = false; } });
+      QUEUE.shift();
+      saveQueue();
+      sent++;
+    }
+  } catch (e) {
+    // Mất mạng thì để lần sau; lỗi khác thì báo để người dùng hoàn tác dòng đó
+    if (!(e instanceof TypeError)) toast('Chưa gửi được 1 lần ghi: ' + e.message);
+  }
+  flushQueue.busy = false;
+  if (sent) {
+    await reload();
+    saveChat();
+    toast(`Đã gửi ${sent} lần ghi sổ lên Google Sheet`);
+    refresh();
+  }
+}
+window.addEventListener('online', () => flushQueue());
+document.addEventListener('visibilitychange', () => { if (!document.hidden) flushQueue(); });
+setInterval(() => { if (QUEUE.length) flushQueue(); }, 30000);
 function needOnline() {
   if (OFFLINE) { toast('Đang mất mạng, chưa ghi được'); return false; }
   return true;
@@ -205,7 +291,15 @@ function setHeader(title, opts = {}) {
     box.appendChild(b);
   });
 }
+let CURRENT = ['chat'];
+// Vẽ lại màn hình đang xem sau khi sổ thay đổi ngầm (không làm mất ô đang gõ)
+function refresh() {
+  const [tab, arg] = CURRENT;
+  if (tab === 'chat') renderChat();
+  else if (tab === 'customers' || tab === 'customer' || tab === 'report') go(tab, arg);
+}
 function go(tab, arg) {
+  CURRENT = [tab, arg];
   const navTab = { customer: 'customers', report: 'customers', customerForm: 'customers', settings: '' }[tab] ?? tab;
   document.querySelectorAll('nav button').forEach(b => b.classList.toggle('on', b.dataset.tab === navTab));
   document.body.classList.toggle('chat-mode', tab === 'chat');
@@ -218,7 +312,7 @@ function go(tab, arg) {
 const settingsBtn = { text: '⚙', label: 'Cài đặt', fn: () => go('settings') };
 
 // ---------- Ghi sổ (khung nhắn tin) ----------
-const CHIPS = ['Ai đang nợ?', 'Hôm nay bán bao nhiêu?', 'Tổng kết tuần', 'Cách ghi sổ'];
+const CHIPS = ['✏️ Ghi tay', 'Ai đang nợ?', 'Hôm nay bán bao nhiêu?', 'Tổng kết tuần', 'Cách ghi sổ'];
 const HELP = 'Nhắn giống như nhắn Zalo, ví dụ:\n• cô Ba lấy 50 trả 30\n• anh Phúc trả 100\n• chú Tư lấy 1500 trả đủ\n• bà Sáu trả hết nợ\n\nSố tiền tính bằng nghìn đồng: 50 là 50.000đ, 1500 là 1.500.000đ.';
 
 function saveChat() { store('svs_chat', CHAT.slice(-60)); }
@@ -239,10 +333,14 @@ function viewChat(prefill) {
         <input id="askQ" placeholder="Nhắn để ghi sổ…" autocomplete="off" enterkeyhint="send">
         <button aria-label="Gửi">➤</button>
       </form>
-    </div>`;
+    </div>
+    <datalist id="custNames">${DATA.customers.map(c => `<option value="${esc(c.Ten)}">`).join('')}</datalist>`;
   renderChat();
   $('#chat').onclick = onChatClick;
-  document.querySelectorAll('[data-chip]').forEach(b => b.onclick = () => send(b.dataset.chip));
+  document.querySelectorAll('[data-chip]').forEach(b => b.onclick = () => {
+    if (b.dataset.chip === '✏️ Ghi tay') { manualCard('Điền vào đây để ghi sổ:'); renderChat(); }
+    else send(b.dataset.chip);
+  });
   $('#askForm').onsubmit = e => { e.preventDefault(); const q = $('#askQ'); send(q.value); q.value = ''; };
   if (prefill) { const q = $('#askQ'); q.value = prefill; q.focus(); }
 }
@@ -275,7 +373,7 @@ function draftHTML(m) {
     const now = balances()[d.khachId] || 0;
     return `<div class="msg bot cm">${head(flowText(d.tienHang, d.daTra))}
       <div class="cm-foot">${m.undone ? '<span class="muted">↩️ Đã hoàn tác</span>'
-        : `<span><span class="done">✓ Đã ghi</span> · ${balText(now)}</span><button class="undo" data-act="undo" data-id="${m.id}">Hoàn tác</button>`}</div></div>`;
+        : `<span>${m.queued ? '<span class="wait">🕓 Lưu trên máy</span>' : '<span class="done">✓ Đã ghi</span>'} · ${balText(now)}</span><button class="undo" data-act="undo" data-id="${m.id}">Hoàn tác</button>`}</div></div>`;
   }
   if (m.editing) {
     return `<div class="msg bot cm">${head('Sửa số tiền (nghìn đồng)')}
@@ -306,6 +404,7 @@ function msgHTML(m) {
       <button class="opt new" data-act="new" data-id="${m.id}">➕ Khách mới: ${esc(m.draft.rawName)}</button></div>`;
   }
   if (m.kind === 'thinking') return `<div class="msg bot muted">Đang xem sổ…</div>`;
+  if (m.kind === 'manual') return manualHTML(m);
   return `<div class="msg bot">${fmtText(m.text)}${m.go ? `<button class="btn soft" data-go="${m.go}">${esc(m.goLabel)}</button>` : ''}</div>`;
 }
 
@@ -352,7 +451,13 @@ async function send(text) {
   const e = parseEntry(text);
   if (e) { proposeEntry(e.name, e, ngay, text); return renderChat(); }
   if (quickAnswer(t)) return renderChat();
-  if (OFFLINE) { botSay('Đang mất mạng nên mình chỉ hiểu câu đơn giản, ví dụ: cô Ba lấy 50 trả 30'); return renderChat(); }
+  // Câu có vẻ là ghi sổ: AI không giúp được thì mở thẻ ghi tay để vẫn lưu được
+  const looksLikeEntry = /\d|\b(lay|mua|tra|dua|gui|no)\b/.test(t);
+  if (OFFLINE) {
+    if (looksLikeEntry) manualCard('Đang mất mạng nên mình chỉ hiểu câu đơn giản. Bạn điền tay vào đây, sổ sẽ lưu trên máy rồi tự gửi khi có mạng:', text, ngay);
+    else botSay('Đang mất mạng nên mình chỉ hiểu câu đơn giản, ví dụ: cô Ba lấy 50 trả 30');
+    return renderChat();
+  }
 
   send.busy = true;
   const wait = { id: uid(), role: 'bot', kind: 'thinking' };
@@ -362,14 +467,42 @@ async function send(text) {
     CHAT.splice(CHAT.indexOf(wait), 1);
     if (r.loai === 'ghi_so' && r.ten_khach && (r.tien_ve || r.da_tra)) {
       proposeEntry(r.ten_khach, { tienHang: Math.round(r.tien_ve || 0), daTra: Math.round(r.da_tra || 0) }, ngay, text);
+    } else if (r.loai !== 'cau_hoi' && looksLikeEntry) {
+      manualCard('Mình chưa hiểu câu này. Bạn điền giúp vào đây nhé:', text, ngay);
     } else botSay(r.tra_loi || 'Mình chưa hiểu. ' + HELP);
   } catch (err) {
     CHAT.splice(CHAT.indexOf(wait), 1);
-    botSay('⚠️ ' + errText(err, 'Không có mạng, thử lại sau.'));
+    if (looksLikeEntry) manualCard('⚠️ ' + errText(err, 'Không có mạng.') + '\nBạn điền tay vào đây để vẫn ghi được sổ:', text, ngay);
+    else botSay('⚠️ ' + errText(err, 'Không có mạng, thử lại sau.'));
   }
   send.busy = false;
   renderChat();
 }
+
+// Thẻ ghi tay: dùng khi AI không hiểu hoặc không chạy. Đoán sẵn tên khách nếu câu nhắn có tên trong sổ.
+function manualCard(intro, text = '', ngay = DATA.today) {
+  const t = norm(text);
+  const guess = DATA.customers.filter(c => t.includes(norm(c.Ten))).sort((a, b) => b.Ten.length - a.Ten.length)[0];
+  CHAT.push({ id: uid(), role: 'bot', kind: 'manual', intro, name: guess ? guess.Ten : '', ngay, note: text });
+}
+function manualHTML(m) {
+  if (m.status === 'done') return `<div class="msg bot muted">Đã điền tay.</div>`;
+  return `<div class="msg bot cm">${intro(m.intro)}
+    <div class="cm-manual">
+      <label for="mN${m.id}">Tên khách</label>
+      <input id="mN${m.id}" list="custNames" value="${esc(m.name)}" placeholder="Gõ vài chữ để chọn" autocomplete="off">
+      <div class="cm-edit" style="padding-left:0">
+        <label for="mH${m.id}">Bán</label><input id="mH${m.id}" inputmode="decimal" placeholder="0">
+        <label for="mT${m.id}">Thu</label><input id="mT${m.id}" inputmode="decimal" placeholder="0">
+      </div>
+      <div class="hint">Số tiền tính bằng nghìn: 500 là 500.000đ</div>
+    </div>
+    <div class="cm-actions" style="padding-left:0">
+      <button class="b-ok" data-act="manualok" data-id="${m.id}">Tiếp</button>
+      <button class="b-ghost" data-act="manualno" data-id="${m.id}">Huỷ</button>
+    </div></div>`;
+}
+const intro = s => s ? `<div style="margin-bottom:8px">${fmtText(s)}</div>` : '';
 
 async function onChatClick(ev) {
   const goBtn = ev.target.closest('[data-go]');
@@ -387,6 +520,17 @@ async function onChatClick(ev) {
     CHAT.push({ id: uid(), role: 'bot', kind: 'draft', draft });
     return renderChat();
   }
+  if (act === 'manualok') {
+    const name = $('#mN' + m.id).value.trim();
+    const h = parseMoney($('#mH' + m.id).value || '0'), t = parseMoney($('#mT' + m.id).value || '0');
+    if (!name) return toast('Nhập tên khách');
+    if (h == null || t == null) return toast('Số tiền chưa đúng, gõ ví dụ 50 hoặc 1tr2');
+    if (!h && !t) return toast('Nhập số tiền bán hoặc thu');
+    m.status = 'done';
+    proposeEntry(name, { tienHang: h, daTra: t }, m.ngay, m.note || `${name} bán ${h / 1000} thu ${t / 1000}`);
+    return renderChat();
+  }
+  if (act === 'manualno') { m.status = 'done'; return renderChat(); }
   if (act === 'edit') { m.editing = true; return renderChat(); }
   if (act === 'editok') {
     const h = parseMoney($('#eH' + m.id).value || '0'), t = parseMoney($('#eT' + m.id).value || '0');
@@ -396,19 +540,25 @@ async function onChatClick(ev) {
   }
   if (act === 'cancel') { m.status = 'cancelled'; return renderChat(); }
   if (act === 'save') {
-    if (!needOnline()) return;
     const d = m.draft;
     if (!d.tienHang && !d.daTra) return toast('Chưa có số tiền nào để ghi');
     b.disabled = true; b.textContent = 'Đang ghi…';
+    const keepLocal = () => { m.txId = enqueue(d); m.queued = true; m.status = 'saved'; };
+    // Mất mạng, hoặc còn lần ghi đang chờ (giữ đúng thứ tự): lưu trên máy rồi gửi sau
+    if (OFFLINE || QUEUE.length) { keepLocal(); renderChat(); flushQueue(); return; }
     try {
-      if (!d.khachId) d.khachId = await call('saveCustomer', { Ten: d.newName });
-      m.txId = await call('addTransaction', { KhachID: d.khachId, Ngay: d.ngay, TienHang: d.tienHang, DaTra: d.daTra, GhiChu: d.ghiChu });
+      if (!d.khachId) d.khachId = await api('saveCustomer', { Ten: d.newName });
+      m.txId = await api('addTransaction', { KhachID: d.khachId, Ngay: d.ngay, TienHang: d.tienHang, DaTra: d.daTra, GhiChu: d.ghiChu });
       await reload();
       m.status = 'saved';
-    } catch (_) { /* toast đã báo */ }
+    } catch (e) {
+      if (e instanceof TypeError) { keepLocal(); toast('Mất mạng, đã lưu tạm trên máy'); }
+      else toast(e.message);
+    }
     return renderChat();
   }
   if (act === 'undo') {
+    if (m.queued) { removeQueued(m.txId); m.undone = true; toast('Đã hoàn tác'); return renderChat(); }
     if (!needOnline()) return;
     b.disabled = true;
     try { await call('deleteTransaction', { id: m.txId }); await reload(); m.undone = true; toast('Đã hoàn tác'); } catch (_) {}
@@ -518,6 +668,12 @@ function viewCustomer(id) {
 }
 
 async function delTx(txId, custId) {
+  if (txId.startsWith('Q')) {
+    if (!confirm('Xoá dòng này khỏi sổ?')) return;
+    CHAT.forEach(m => { if (m.txId === txId) m.undone = true; });
+    removeQueued(txId); saveChat(); toast('Đã xoá');
+    return viewCustomer(custId);
+  }
   if (!needOnline() || !confirm('Xoá dòng này khỏi sổ?')) return;
   try { await call('deleteTransaction', { id: txId }); await reload(); toast('Đã xoá'); } catch (_) {}
   viewCustomer(custId);
@@ -547,6 +703,7 @@ function viewCustomerForm(c = {}) {
       <button class="btn" id="cSave">Lưu</button>
     </div>`;
   $('#cSave').onclick = async e => {
+    if (c.pending) return toast('Khách này đang chờ gửi lên, sửa được sau khi có mạng');
     if (!needOnline()) return;
     e.target.disabled = true;
     try {
@@ -715,6 +872,6 @@ if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catc
   CHAT = CHAT.filter(m => m.kind !== 'thinking');
   const cfg = getCfg();
   if (!cfg.url || !cfg.token) return go('settings');
-  try { await reload(); autoWeekly(); go('chat'); }
+  try { await reload(); autoWeekly(); go('chat'); flushQueue(); }
   catch (e) { toast(e.message); go('settings'); }
 })();
