@@ -227,15 +227,18 @@ function geminiKey_() {
 
 function gemini_(body) {
   const model = (PropertiesService.getScriptProperties().getProperty('GEMINI_MODEL') || 'gemini-2.5-flash').trim();
-  const res = UrlFetchApp.fetch(
-    'https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model) + ':generateContent',
-    {
-      method: 'post',
-      contentType: 'application/json',
-      headers: { 'x-goog-api-key': geminiKey_() },
-      payload: JSON.stringify(body),
-      muteHttpExceptions: true,
-    });
+  const key = geminiKey_();
+  // Khoá Google AI Studio bắt đầu bằng "AIza"; khoá Vertex AI (tạo trong Google Cloud) bắt đầu bằng "AQ."
+  const url = key.startsWith('AQ.')
+    ? 'https://aiplatform.googleapis.com/v1/publishers/google/models/' + encodeURIComponent(model) + ':generateContent'
+    : 'https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model) + ':generateContent';
+  const res = UrlFetchApp.fetch(url, {
+    method: 'post',
+    contentType: 'application/json',
+    headers: { 'x-goog-api-key': key },
+    payload: JSON.stringify(body),
+    muteHttpExceptions: true,
+  });
   const code = res.getResponseCode();
   let json = {};
   try { json = JSON.parse(res.getContentText()); } catch (_) {}
@@ -253,7 +256,7 @@ function geminiErrorText_(r) {
   if (isKeyError_(r.err)) return 'Khoá Gemini không đúng. Tạo khoá mới ở aistudio.google.com/apikey rồi dán lại vào GEMINI_API_KEY';
   if (/SERVICE_DISABLED|has not been used|is disabled/i.test(raw)) return 'Dự án của khoá chưa bật Gemini API. Tạo khoá ở aistudio.google.com/apikey sẽ tự bật';
   if (/location is not supported|User location/i.test(raw)) return 'Gemini chưa hỗ trợ khu vực của máy chủ, thử đổi GEMINI_MODEL';
-  if (r.code === 403) return 'Khoá Gemini bị giới hạn quyền. Kiểm tra mục giới hạn của khoá trong Google Cloud';
+  if (r.code === 403) return 'Khoá Gemini không có quyền. Cách dễ nhất: tạo khoá ở aistudio.google.com/apikey (bắt đầu bằng AIza) rồi dán vào GEMINI_API_KEY';
   if (r.code === 404) return 'Không có mô hình "' + r.model + '". Sửa GEMINI_MODEL, ví dụ gemini-2.5-flash';
   if (r.code === 429) return 'Trợ lý đang quá tải hoặc hết lượt miễn phí, thử lại sau ít phút';
   return 'Gemini báo lỗi (mã ' + r.code + '). Mở Apps Script, chạy hàm testGemini để xem chi tiết';
@@ -262,7 +265,8 @@ function geminiErrorText_(r) {
 // Chạy trong trình soạn Apps Script để kiểm tra khoá Gemini; kết quả hiện trong Nhật ký thực thi
 function testGemini() {
   const key = geminiKey_();
-  Logger.log('Khoá dài ' + key.length + ' ký tự, bắt đầu bằng "' + key.slice(0, 4) + '" (khoá đúng thường bắt đầu bằng AIza)');
+  Logger.log('Khoá dài ' + key.length + ' ký tự, bắt đầu bằng "' + key.slice(0, 4) + '" → '
+    + (key.startsWith('AQ.') ? 'khoá Vertex AI (Google Cloud)' : key.startsWith('AIza') ? 'khoá Google AI Studio' : 'không rõ loại khoá'));
   const r = gemini_({ contents: [{ role: 'user', parts: [{ text: 'Trả lời đúng một chữ: OK' }] }] });
   if (r.code === 200) Logger.log('✅ Gemini chạy tốt với mô hình ' + r.model);
   else Logger.log('❌ ' + geminiErrorText_(r) + '\nChi tiết: ' + JSON.stringify(r.err));
