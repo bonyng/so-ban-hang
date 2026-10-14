@@ -54,8 +54,9 @@ Sau bước này, Sheet có thêm hai trang tính **KhachHang** và **GiaoDich**
 
 ## Bước 5. Cài lên điện thoại
 
-1. Mở địa chỉ GitHub Pages trên điện thoại.
-2. App sẽ mở màn hình **Cài đặt**. Dán **đường dẫn kết nối** (bước 3) và **mã truy cập** (bước 1), rồi bấm **Lưu và kiểm tra**.
+1. Trong Apps Script, chạy hàm **setup**. Nhật ký in ra **MÃ TRUY CẬP** (12 ký tự, vd `K7PM-X3QR-9TWD`) và một **link**.
+2. Mở link đó trên điện thoại là vào sổ luôn. Hoặc mở app rồi gõ mã truy cập (hoa hay thường đều được) → **Vào sổ**.
+   Đường dẫn máy chủ đã cài sẵn trong `app.js` (`DEFAULT_API`); nếu triển khai Apps Script mới thì sửa dòng đó.
 3. Thêm app ra màn hình chính:
    - **Android (Chrome):** menu ⋮ → **Thêm vào màn hình chính** (hoặc **Cài đặt ứng dụng**).
    - **iPhone (Safari):** nút Chia sẻ → **Thêm vào MH chính**.
