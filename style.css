@@ -105,9 +105,16 @@ nav span { display: block; font-size: 1.5rem; line-height: 1.2; }
 .chips { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 8px; scrollbar-width: none; max-width: 640px; margin: 0 auto; }
 .chips::-webkit-scrollbar { display: none; }
 .chips button { flex-shrink: 0; border: 1px solid var(--line); background: #fff; border-radius: 18px; padding: 7px 14px; font-size: .85rem; color: var(--text); }
-.ask { display: flex; gap: 8px; max-width: 640px; margin: 0 auto; }
-.ask input { border-radius: 24px; padding: 12px 18px; }
-.ask button { flex-shrink: 0; width: 52px; height: 52px; border: 0; border-radius: 50%; background: var(--bubble-me); color: #fff; font-size: 1.3rem; }
+.ask { display: flex; align-items: center; gap: 8px; max-width: 640px; margin: 0 auto; }
+.ask input { border-radius: 22px; padding: 9px 16px; height: 44px; background: #fff; }
+.ask button { flex-shrink: 0; width: 44px; height: 44px; border: 0; border-radius: 50%; background: var(--bubble-me); color: #fff; font-size: 1.1rem; }
+
+/* Đang gõ (bàn phím mở): giống Zalo — ẩn thanh tab và nút nhanh, ô nhập nằm sát bàn phím.
+   --kb là chiều cao bàn phím trên iPhone (Android tự co màn hình nên --kb = 0). */
+body.typing nav, body.typing .chips { display: none; }
+body.typing .chatbar { bottom: var(--kb, 0px); padding-top: 6px; padding-bottom: 6px; }
+body.chat-mode.typing { padding-bottom: calc(var(--kb, 0px) + 72px); }
+body.typing #toast { bottom: calc(var(--kb, 0px) + 72px); }
 
 /* ---- Danh sách khách kiểu Zalo ---- */
 .list { background: var(--card); border-radius: 14px; overflow: hidden; }

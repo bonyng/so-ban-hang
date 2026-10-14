@@ -229,6 +229,18 @@ const FILLER = new Set(['nha', 'nhe', 'nhen', 'roi', 'a', 'ha', 'tien', 'dong', 
 function parseEntry(text) {
   const words = text.trim().split(/\s+/);
   const nw = words.map(norm);
+  // Kiểu nhắn ngắn: "Bình 50 nợ" / "Bình nợ 50" = bán 50k chưa thu
+  const n = nw.length;
+  const isNo = w => w === 'no' || w === 'thieu';
+  const hasKw = ws => ws.some(w => KW_LAY.includes(w) || KW_TRA.includes(w));
+  if (n >= 3 && !hasKw(nw)) {
+    if (isNo(nw[n - 1]) && parseMoney(nw[n - 2]) != null) {
+      return { name: words.slice(0, n - 2).join(' '), tienHang: parseMoney(nw[n - 2]), daTra: 0, payAll: false, payFull: false };
+    }
+    if (isNo(nw[n - 2]) && parseMoney(nw[n - 1]) != null) {
+      return { name: words.slice(0, n - 2).join(' '), tienHang: parseMoney(nw[n - 1]), daTra: 0, payAll: false, payFull: false };
+    }
+  }
   const first = nw.findIndex(w => KW_LAY.includes(w) || KW_TRA.includes(w));
   if (first <= 0) return null;
   const out = { name: words.slice(0, first).join(' '), tienHang: 0, daTra: 0, payAll: false, payFull: false };
@@ -342,6 +354,9 @@ function viewChat(prefill) {
     else send(b.dataset.chip);
   });
   $('#askForm').onsubmit = e => { e.preventDefault(); const q = $('#askQ'); send(q.value); q.value = ''; };
+  // Bấm gửi không làm đóng bàn phím, để nhắn tiếp như Zalo
+  $('#askForm button').addEventListener('mousedown', e => e.preventDefault());
+  $('#askForm button').addEventListener('touchstart', e => { e.preventDefault(); $('#askForm').requestSubmit(); }, { passive: false });
   if (prefill) { const q = $('#askQ'); q.value = prefill; q.focus(); }
 }
 
@@ -862,6 +877,31 @@ function viewSettings() {
       e.target.disabled = false;
     }
   };
+}
+
+// ---------- Bàn phím mở/đóng ----------
+const isField = el => el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') && !['checkbox', 'radio', 'button'].includes(el.type);
+function fitKeyboard() {
+  const vv = window.visualViewport;
+  const kb = vv ? Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop)) : 0;
+  document.documentElement.style.setProperty('--kb', kb + 'px');
+  if (document.body.classList.contains('chat-mode') && document.body.classList.contains('typing')) {
+    window.scrollTo(0, document.body.scrollHeight);
+  }
+}
+document.addEventListener('focusin', e => {
+  if (!isField(e.target)) return;
+  document.body.classList.add('typing');
+  setTimeout(fitKeyboard, 300); // chờ bàn phím mở xong
+});
+document.addEventListener('focusout', () => setTimeout(() => {
+  if (isField(document.activeElement)) return;
+  document.body.classList.remove('typing');
+  document.documentElement.style.setProperty('--kb', '0px');
+}, 100));
+if (window.visualViewport) {
+  visualViewport.addEventListener('resize', fitKeyboard);
+  visualViewport.addEventListener('scroll', fitKeyboard);
 }
 
 // ---------- Khởi động ----------
