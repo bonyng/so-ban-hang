@@ -179,7 +179,7 @@ const AI_RULES = [
 const CHAT_SCHEMA = {
   type: 'OBJECT',
   properties: {
-    loai: { type: 'STRING', enum: ['ghi_so', 'cau_hoi', 'khong_ro'] },
+    loai: { type: 'STRING', format: 'enum', enum: ['ghi_so', 'cau_hoi', 'khong_ro'] },
     ten_khach: { type: 'STRING' },
     tien_ve: { type: 'NUMBER' },
     da_tra: { type: 'NUMBER' },
@@ -191,10 +191,6 @@ const CHAT_SCHEMA = {
 function chat(p) {
   const text = String(p.text || '').trim();
   if (!text) throw new Error('Chưa nhập tin nhắn');
-  const props = PropertiesService.getScriptProperties();
-  const key = props.getProperty('GEMINI_API_KEY');
-  if (!key) throw new Error('Chưa cài khoá Gemini (GEMINI_API_KEY) trong Apps Script');
-  const model = props.getProperty('GEMINI_MODEL') || 'gemini-2.5-flash';
 
   const history = (p.history || []).slice(-6).map(h => ({
     role: h.role === 'model' ? 'model' : 'user',
@@ -205,30 +201,71 @@ function chat(p) {
     contents: history.concat([{ role: 'user', parts: [{ text: text.slice(0, 500) }] }]),
     generationConfig: { temperature: 0.1, responseMimeType: 'application/json', responseSchema: CHAT_SCHEMA },
   };
+  let r = gemini_(body);
+  // Một số mô hình không nhận responseSchema: thử lại chỉ với yêu cầu trả JSON
+  if (r.code === 400 && !isKeyError_(r.err)) {
+    delete body.generationConfig.responseSchema;
+    body.systemInstruction.parts[0].text += '\n\nChỉ trả về JSON với các trường: loai, ten_khach, tien_ve, da_tra, tra_loi.';
+    r = gemini_(body);
+  }
+  if (r.code !== 200) throw new Error(geminiErrorText_(r));
+
+  const parts = (r.json.candidates && r.json.candidates[0] && r.json.candidates[0].content && r.json.candidates[0].content.parts) || [];
+  try {
+    return JSON.parse(parts.map(x => x.text || '').join('').replace(/^```(?:json)?\s*|\s*```$/g, ''));
+  } catch (_) {
+    return { loai: 'khong_ro', tra_loi: 'Mình chưa hiểu. Thử nhắn kiểu: cô Ba lấy 50 trả 30' };
+  }
+}
+
+function geminiKey_() {
+  // Bỏ khoảng trắng hoặc dấu ngoặc lỡ dán kèm
+  const key = String(PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY') || '').trim().replace(/^["']+|["']+$/g, '');
+  if (!key) throw new Error('Chưa cài khoá Gemini (GEMINI_API_KEY) trong Apps Script');
+  return key;
+}
+
+function gemini_(body) {
+  const model = (PropertiesService.getScriptProperties().getProperty('GEMINI_MODEL') || 'gemini-2.5-flash').trim();
   const res = UrlFetchApp.fetch(
     'https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model) + ':generateContent',
     {
       method: 'post',
       contentType: 'application/json',
-      headers: { 'x-goog-api-key': key },
+      headers: { 'x-goog-api-key': geminiKey_() },
       payload: JSON.stringify(body),
       muteHttpExceptions: true,
     });
   const code = res.getResponseCode();
-  if (code !== 200) {
-    console.error('Gemini ' + code + ': ' + res.getContentText()); // xem chi tiết trong Nhật ký thực thi
-    if (code === 429) throw new Error('Trợ lý đang quá tải hoặc hết lượt miễn phí, thử lại sau ít phút');
-    if (code === 400 || code === 401 || code === 403) throw new Error('Khoá Gemini không hợp lệ, kiểm tra lại GEMINI_API_KEY');
-    if (code === 404) throw new Error('Tên mô hình Gemini không đúng, kiểm tra lại GEMINI_MODEL');
-    throw new Error('Trợ lý đang gặp lỗi, thử lại sau');
-  }
-  const j = JSON.parse(res.getContentText());
-  const parts = (j.candidates && j.candidates[0] && j.candidates[0].content && j.candidates[0].content.parts) || [];
-  try {
-    return JSON.parse(parts.map(x => x.text || '').join(''));
-  } catch (_) {
-    return { loai: 'khong_ro', tra_loi: 'Mình chưa hiểu. Thử nhắn kiểu: cô Ba lấy 50 trả 30' };
-  }
+  let json = {};
+  try { json = JSON.parse(res.getContentText()); } catch (_) {}
+  if (code !== 200) console.error('Gemini ' + code + ' (' + model + '): ' + res.getContentText()); // xem trong Nhật ký thực thi
+  return { code, json, err: json.error || {}, model };
+}
+
+function isKeyError_(err) {
+  return /API key|API_KEY/i.test(JSON.stringify(err || {}));
+}
+
+// Đổi lỗi tiếng Anh của Gemini thành câu tiếng Việt nói rõ nguyên nhân
+function geminiErrorText_(r) {
+  const raw = JSON.stringify(r.err || {});
+  if (isKeyError_(r.err)) return 'Khoá Gemini không đúng. Tạo khoá mới ở aistudio.google.com/apikey rồi dán lại vào GEMINI_API_KEY';
+  if (/SERVICE_DISABLED|has not been used|is disabled/i.test(raw)) return 'Dự án của khoá chưa bật Gemini API. Tạo khoá ở aistudio.google.com/apikey sẽ tự bật';
+  if (/location is not supported|User location/i.test(raw)) return 'Gemini chưa hỗ trợ khu vực của máy chủ, thử đổi GEMINI_MODEL';
+  if (r.code === 403) return 'Khoá Gemini bị giới hạn quyền. Kiểm tra mục giới hạn của khoá trong Google Cloud';
+  if (r.code === 404) return 'Không có mô hình "' + r.model + '". Sửa GEMINI_MODEL, ví dụ gemini-2.5-flash';
+  if (r.code === 429) return 'Trợ lý đang quá tải hoặc hết lượt miễn phí, thử lại sau ít phút';
+  return 'Gemini báo lỗi (mã ' + r.code + '). Mở Apps Script, chạy hàm testGemini để xem chi tiết';
+}
+
+// Chạy trong trình soạn Apps Script để kiểm tra khoá Gemini; kết quả hiện trong Nhật ký thực thi
+function testGemini() {
+  const key = geminiKey_();
+  Logger.log('Khoá dài ' + key.length + ' ký tự, bắt đầu bằng "' + key.slice(0, 4) + '" (khoá đúng thường bắt đầu bằng AIza)');
+  const r = gemini_({ contents: [{ role: 'user', parts: [{ text: 'Trả lời đúng một chữ: OK' }] }] });
+  if (r.code === 200) Logger.log('✅ Gemini chạy tốt với mô hình ' + r.model);
+  else Logger.log('❌ ' + geminiErrorText_(r) + '\nChi tiết: ' + JSON.stringify(r.err));
 }
 
 // Tóm tắt sổ thành văn bản gửi kèm câu hỏi. Tính sẵn số dư để AI không phải cộng tay.
